@@ -1,0 +1,120 @@
+# Start builder stage
+
+FROM public.ecr.aws/lambda/python:3.8 AS builder
+
+# Conditionally configure ZScaler certs for MDM MacBook building
+
+ARG ZSCALER_CERT
+RUN if [ -n "$ZSCALER_CERT" ] ; then \
+  echo "$ZSCALER_CERT" > /etc/pki/ca-trust/source/anchors/zscaler.crt && \
+  update-ca-trust && \
+  pip config set global.cert /etc/pki/ca-trust/source/anchors/zscaler.crt ; \
+
+fi
+
+# Install build dependencies
+RUN yum install -y \
+    autoconf \
+    autoconf-archive \
+    automake \
+    gcc \
+    gcc-c++ \
+    gzip \
+    libtool \
+    libstdc++ \
+    make \
+    pkg-config \
+    tar \
+    wget \
+
+&& yum clean all
+
+# Install Tesseract dependencies
+RUN yum install -y \
+    libjpeg-devel \
+    libpng-devel \
+    libtiff-devel \
+    zlib-devel \
+&& yum clean all
+
+# Install OpenCV dependencies
+RUN yum install -y \
+    mesa-libGL \
+&& yum clean all
+
+WORKDIR /
+
+# Install Leptonica
+ARG LEPTONICA_VERSION=1.81.1
+RUN wget -nv http://www.leptonica.org/source/leptonica-$LEPTONICA_VERSION.tar.gz && \
+  tar xzvf leptonica-$LEPTONICA_VERSION.tar.gz && \
+  cd leptonica-$LEPTONICA_VERSION && \
+  ./configure && \
+  make && \
+  make install
+
+# Install Tesseract
+ARG TESSERACT_VERSION=4.1.1
+RUN wget -nv https://github.com/tesseract-ocr/tesseract/archive/refs/tags/$TESSERACT_VERSION.tar.gz && \
+  tar xzf $TESSERACT_VERSION.tar.gz && \
+  cd tesseract-$TESSERACT_VERSION && \
+  ./autogen.sh && \
+  PKG_CONFIG_PATH=/usr/local/lib/pkgconfig ./configure && \
+  make && \
+  make install
+
+# Install Tesseract english language data
+
+RUN wget -nv https://github.com/tesseract-ocr/tessdata_best/raw/main/deu.traineddata -P /usr/local/share/tessdata/
+# Install Ghostscript
+
+ARG GHOSTSCRIPT_VERSION=9.54.0
+RUN wget -nv https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs9540/ghostscript-$GHOSTSCRIPT_VERSION.tar.gz && \
+  tar xzf ghostscript-$GHOSTSCRIPT_VERSION.tar.gz && \
+  cd ghostscript-$GHOSTSCRIPT_VERSION && \
+  ./configure && \
+  make && \
+  make install
+
+# Configure trusted CAs for Python requests library
+ENV REQUESTS_CA_BUNDLE="/etc/ssl/certs/ca-bundle.crt"
+
+# Upgrade pip and install pipenv
+
+RUN pip install --no-cache-dir --upgrade pip==21.0.1 && \
+  pip install --no-cache-dir pipenv==2020.11.15
+
+# Set working directory to lambda task root
+
+WORKDIR ${​LAMBDA_TASK_ROOT}​
+# Copy Pipfile and Pipfile.lock to lambda task root
+
+COPY Pipfile Pipfile.lock ./
+
+# Install python dependencies and remove no longer required files
+RUN pipenv lock -r > requirements.txt && \
+  pip install --no-cache-dir -r requirements.txt -t . && \
+  rm Pipfile Pipfile.lock requirements.txt
+
+# -----------------------------------------
+
+# Start runtime stage
+FROM public.ecr.aws/lambda/python:3.8 AS runtime
+
+# Copy dependencies from builder stage
+COPY --from=builder /usr/local /usr/local
+COPY --from=builder /usr/lib64 /usr/lib64
+
+# Copy lambda task root from builder stage
+COPY --from=builder ${​LAMBDA_TASK_ROOT}​${​LAMBDA_TASK_ROOT}​
+
+# Set working directory to lambda task root
+WORKDIR ${​LAMBDA_TASK_ROOT}​
+
+# Copy lambda handler to lambda task root
+COPY index.py ./
+COPY logger.py ./
+COPY /schemas/* ./schemas/
+
+# Set the command to the lambda handler
+CMD [ "index.handler" ]

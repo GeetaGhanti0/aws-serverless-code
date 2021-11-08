@@ -1,0 +1,19 @@
+[[source]]
+url = https://pypi.org/simple
+verify_ssl = true
+name = "pypi"
+
+[packages]
+boto3 = "1.17.57"
+numpy = "1.20.2"
+opencv-python = "4.5.1.48"
+pytesseract = "0.3.8"
+aws-encryption-sdk = "3.0.0"
+jsonschema = "3.2.0"
+structlog = "21.1.0"
+
+[dev-packages]
+pytest = "6.2.4"
+
+[requires]
+python_version = "3.8"
